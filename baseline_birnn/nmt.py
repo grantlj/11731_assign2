@@ -23,7 +23,7 @@ Options:
     --clip-grad=<float>                     gradient clipping [default: 5.0]
     --log-every=<int>                       log every [default: 10]
     --max-epoch=<int>                       max epoch [default: 30]
-    --patience=<int>                        wait for how many iterations to decay learning rate [default: 5]
+    --patience=<int>                        wait for how many iterations to decay learning rate [default: 3]
     --max-num-trial=<int>                   terminate training after how many trials [default: 5]
     --lr-decay=<float>                      learning rate decay [default: 0.5]
     --beam-size=<int>                       beam size [default: 5]
