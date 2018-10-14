@@ -92,10 +92,11 @@ class NMT(nn.Module):
         self.src_embed = nn.Embedding(len(vocab.src.word2id), embed_size, padding_idx=0).cuda()
         self.tgt_embed = nn.Embedding(self.tgt_vocab_size, embed_size, padding_idx=0).cuda()
         self.word_dist = nn.Linear(embed_size, self.tgt_vocab_size).cuda()
+        self.dropout = nn.Dropout(p=dropout_rate)
 
         self.cpu_time = 0
 
-        self.key_size = 50
+        self.key_size = 100
 
         # if self.decoding_type is "ATTENTION":
         '''
@@ -295,7 +296,7 @@ class NMT(nn.Module):
             decoder_outputs[:, step, :] = torch.cat((decoder_output.transpose(0, 1), context), dim=2).squeeze(1)
             decoder_input = tgt_embed[:, step + 1, :].unsqueeze(1)
 
-        logits = self.word_dist(F.tanh(self.out(decoder_outputs)))
+        logits = self.word_dist(F.tanh(self.out(self.dropout(decoder_outputs))))
         logits = F.log_softmax(logits, dim=2)
         logits = logits.contiguous().view(-1, self.tgt_vocab_size)
         loss = self.loss(logits, tgt_sents[:, 1:].contiguous().view(-1))
@@ -445,12 +446,14 @@ class NMT(nn.Module):
 
     #   set model to train and test state
     def set_model_to_train(self):
+        self.train()
         self.encoder.train()
         self.decoder.train()
         return
 
     #   set model to validation
     def set_model_to_eval(self):
+        self.eval()
         self.encoder.eval()
         self.decoder.eval()
         return
