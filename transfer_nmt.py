@@ -16,6 +16,8 @@ Options:
     --dev-src=<file>                        dev source file
     --dev-tgt=<file>                        dev target file
     --vocab=<file>                          vocab file
+    --src_langs=<string>                    the list of source languages, e.g. "en,tr,ru"
+    --tgt_lang=<string>                     the target language type
     --seed=<int>                            seed [default: 0]
     --batch-size=<int>                      batch size [default: 32]
     --embed-size=<int>                      embedding size [default: 256]
@@ -53,7 +55,7 @@ from tqdm import tqdm
 from nltk.translate.bleu_score import corpus_bleu, sentence_bleu, SmoothingFunction
 
 import utils
-from utils import read_corpus, batch_iter
+from utils import read_corpus, batch_iter,batch_iter_multi_src,read_corpus_multi_src
 from vocab import Vocab, VocabEntry
 import torch
 import torch.nn.functional as F
@@ -73,25 +75,31 @@ MAX_LEN = 100
 class NMT(nn.Module):
 
     def __init__(self, embed_size, hidden_size, vocab, loss,
-                 languages,
+                 src_id_list,tgt_id,
                  dropout_rate=0.2):
         super(NMT, self).__init__()
 
-        self.bi_direct = bi_direct
-        self.conv = conv
-        self.local_att = local_att
+        #   LJ: the source language ids
+        self.src_id_list=src_id_list
+
+        #   LJ: the target language id
+        self.tgt_id=tgt_id
+
+        #self.bi_direct = bi_direct
+        #self.conv = conv
+        #self.local_att = local_att
         self.embed_size = embed_size
         self.hidden_size = hidden_size
         self.dropout_rate = dropout_rate
         self.vocab = vocab
-        self.decoding_type = decoding_type
+        #self.decoding_type = decoding_type
         self.loss = loss
         self.tgt_vocab_size = len(vocab.tgt.word2id)
         self.low_src_embed = nn.Embedding(len(vocab.src.word2id), embed_size, padding_idx=0).cuda()
         self.high_src_embed = nn.Embedding(len(vocab.src.word2id), embed_size, padding_idx=0).cuda()
         self.tgt_embed = nn.Embedding(self.tgt_vocab_size, embed_size, padding_idx=0).cuda()
         self.word_dist = nn.Linear(embed_size, self.tgt_vocab_size).cuda()
-        self.languages = languages
+
 
         self.cpu_time = 0
 
@@ -141,6 +149,7 @@ class NMT(nn.Module):
         def train():
             low_ind = lang_labels == self.languages[0]
             high_ind = lang_labels == self.languages[1]
+
             low_src_encodings, low_decoder_init_state = self.encode(src_ind[low_ind], src_lengths[low_ind], 'low')
             high_src_encodings, high_decoder_init_state = self.encode(src_ind[high_ind], src_lengths[high_ind], 'high')
             loss, num_words = self.decode((low_src_encodings, high_src_encodings), src_lengths, (low_src_last_hidden, high_src_last_hidden), tgt_ind, tgt_lengths)
@@ -370,7 +379,7 @@ class NMT(nn.Module):
         # by the NN library to signal the backend to not to keep gradient information
         # e.g., `torch.no_grad()`
 
-        for src_sents, tgt_sents in batch_iter(dev_data, batch_size):
+        for src_sents, tgt_sents,src_ids,tgt_ids in batch_iter_multi_src(dev_data, batch_size):
             loss, num_words = self.__call__(src_sents, tgt_sents, keep_grad=False)
 
             loss = loss.detach().cpu().numpy()
@@ -451,13 +460,14 @@ def compute_corpus_level_bleu_score(references: List[List[str]], hypotheses: Lis
 
 #   LJ: the training process starting here.
 def train(args: Dict[str, str]):
+
     #   LJ: source corpus and target corpus
-    train_data_src = read_corpus(args['--train-src'], source='src')
-    train_data_tgt = read_corpus(args['--train-tgt'], source='tgt')
+    train_data_src = read_corpus_multi_src(args['--train-src'], source='src')
+    train_data_tgt = read_corpus_multi_src(args['--train-tgt'], source='tgt')
 
     #   LJ: the validation set (source and target)
-    dev_data_src = read_corpus(args['--dev-src'], source='src')
-    dev_data_tgt = read_corpus(args['--dev-tgt'], source='tgt')
+    dev_data_src = read_corpus_multi_src(args['--dev-src'], source='src')
+    dev_data_tgt = read_corpus_multi_src(args['--dev-tgt'], source='tgt')
 
     #   LJ: the training and validation sentences pairs
     train_data = list(zip(train_data_src, train_data_tgt))
@@ -476,17 +486,26 @@ def train(args: Dict[str, str]):
     #   LJ: set up the loss function (ignore to <pad>)
     nll_loss = nn.NLLLoss(ignore_index=0)
 
+    #   LJ: add support for multiple src inputs
+    src_name_list=args['--src_langs'].split(",")
+    tgt_name=args['--tgt_lang']
 
+    #   read the name2id mapping
+    lang2id_dict=utils.read_dict_from_pkl("./lang/lang2id.pkl")
+    src_id_list=[lang2id_dict[x] for x in src_name_list]
+    tgt_id=lang2id_dict[tgt_name]
 
 
     #   LJ: build the model
     model = NMT(embed_size=int(args['--embed-size']),
                 hidden_size=int(args['--hidden-size']),
                 dropout_rate=float(args['--dropout']),
-                local_att=bool(args['--local']),
-                conv=bool(args['--conv']),
+                src_id_list=src_id_list,
+                tgt_id=tgt_id,
                 vocab=vocab,
                 loss=nll_loss)
+
+
     bound = float(args['--uniform-init'])
     for p in model.parameters():
         torch.nn.init.uniform_(p.data, a=-bound, b=bound)
@@ -526,7 +545,7 @@ def train(args: Dict[str, str]):
         epoch += 1
 
         #   LJ: ok, we yield the sentences in a shuffle manner.
-        for src_sents, tgt_sents in batch_iter(train_data, batch_size=train_batch_size, shuffle=True):
+        for src_sents, tgt_sents,src_ids,tgt_ids in batch_iter_multi_src(train_data, batch_size=train_batch_size, shuffle=True):
 
             model.set_model_to_train()
 
@@ -665,9 +684,9 @@ def decode(args: Dict[str, str]):
     If the target gold-standard sentences are given, the function also computes
     corpus-level BLEU score.
     """
-    test_data_src = read_corpus(args['TEST_SOURCE_FILE'], source='src')
+    test_data_src = read_corpus_multi_src(args['TEST_SOURCE_FILE'], source='src')
     if args['TEST_TARGET_FILE']:
-        test_data_tgt = read_corpus(args['TEST_TARGET_FILE'], source='tgt')
+        test_data_tgt = read_corpus_multi_src(args['TEST_TARGET_FILE'], source='tgt')
 
     print(f"load model from {args['MODEL_PATH']}", file=sys.stderr)
 
@@ -677,14 +696,24 @@ def decode(args: Dict[str, str]):
     #   LJ: set up the loss function (ignore to <pad>)
     nll_loss = nn.NLLLoss(ignore_index=0)
 
+    #   LJ: add support for multiple src inputs
+    src_name_list = args['--src_langs'].split(",")
+    tgt_name = args['--tgt_lang']
+
+    #   read the name2id mapping
+    lang2id_dict = utils.read_dict_from_pkl("./lang/lang2id.pkl")
+    src_id_list = [lang2id_dict[x] for x in src_name_list]
+    tgt_id = lang2id_dict[tgt_name]
+
+
     #   LJ: build the model
     model = NMT(embed_size=int(args['--embed-size']),
                 hidden_size=int(args['--hidden-size']),
                 dropout_rate=float(args['--dropout']),
-                local_att=bool(args['--local']),
-                conv=bool(args['--conv']),
                 vocab=vocab,
-                loss=nll_loss)
+                loss=nll_loss,
+                src_id_list=src_id_list,
+                tgt_id=tgt_id)
 
     '''
     model.load(args["MODEL_PATH"])

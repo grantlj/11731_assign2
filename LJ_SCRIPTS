@@ -17,6 +17,12 @@ python nmt.py train --cuda \
   --valid-niter 2000 --batch-size 36 --hidden-size 256 \
   --embed-size 256 --uniform-init 0.1 --dropout 0.2 --clip-grad 5.0 --lr-decay 0.5
 
+#   decode the baseline (aztr)
+python nmt.py decode --cuda \
+--vocab "../data_ted/vocab/en-aztr.vocab" \
+--embed-size 256 --hidden-size 256 --dropout 0.2 --beam-size 50 --max-decoding-time-step 100 \
+../models/base_birnn/model_en-aztr.bin ../data_ted/test.en-az.az.txt ../data_ted/test.en-az.en.txt \
+../output/decode_base_birnn_en-az.en.txt
 
 #   train the baseline (glpt)
 python nmt.py train --cuda \
@@ -30,6 +36,13 @@ python nmt.py train --cuda \
   --embed-size 256 --uniform-init 0.1 --dropout 0.2 --clip-grad 5.0 --lr-decay 0.5
 
 
+#   decode the baseline (glpt)
+python nmt.py decode --cuda \
+--vocab "../data_ted/vocab/en-glpt.vocab" \
+--embed-size 256 --hidden-size 256 --dropout 0.2 --beam-size 50 --max-decoding-time-step 100 \
+../models/base_birnn/model_en-glpt.bin ../data_ted/test.en-gl.gl.txt ../data_ted/test.en-gl.en.txt \
+../output/decode_base_birnn_en-gl.en.txt
+
 #   train the baseline (beru)
 python nmt.py train --cuda \
 --vocab "../data_ted/vocab/en-beru.vocab" \
@@ -40,3 +53,11 @@ python nmt.py train --cuda \
  --save-to "../models/base_birnn/model_en-beru.bin" \
   --valid-niter 2000 --batch-size 36 --hidden-size 256 \
   --embed-size 256 --uniform-init 0.1 --dropout 0.2 --clip-grad 5.0 --lr-decay 0.5
+
+
+#   decode the baseline (beru)
+python nmt.py decode --cuda \
+--vocab "../data_ted/vocab/en-beru.vocab" \
+--embed-size 256 --hidden-size 256 --dropout 0.2 --beam-size 50 --max-decoding-time-step 100 \
+../models/base_birnn/model_en-beru.bin ../data_ted/test.en-be.be.txt ../data_ted/test.en-be.en.txt \
+../output/decode_base_birnn_en-be.en.txt
