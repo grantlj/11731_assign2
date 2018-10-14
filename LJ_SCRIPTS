@@ -1,0 +1,42 @@
+#   generate the vocab book
+python vocab.py --train-src=data_ted/train.en-aztr.aztr.txt --train-tgt=data_ted/train.en-aztr.en.txt --size=100000 data_ted/vocab/en-aztr.vocab
+
+
+python vocab.py --train-src=data_ted/train.en-glpt.glpt.txt --train-tgt=data_ted/train.en-glpt.en.txt --size=100000 data_ted/vocab/en-glpt.vocab
+
+python vocab.py --train-src=data_ted/train.en-beru.beru.txt --train-tgt=data_ted/train.en-beru.en.txt --size=100000 data_ted/vocab/en-beru.vocab
+
+#   train the baseline (aztr)
+python nmt.py train --cuda \
+--vocab "../data_ted/vocab/en-aztr.vocab" \
+--train-src "../data_ted/train.en-aztr.aztr.txt" \
+--train-tgt "../data_ted/train.en-aztr.en.txt" \
+--dev-src "../data_ted/dev.en-aztr.aztr.txt" \
+--dev-tgt "../data_ted/dev.en-aztr.en.txt" \
+ --save-to "../models/base_birnn/model_en-aztr.bin" \
+  --valid-niter 2000 --batch-size 36 --hidden-size 256 \
+  --embed-size 256 --uniform-init 0.1 --dropout 0.2 --clip-grad 5.0 --lr-decay 0.5
+
+
+#   train the baseline (glpt)
+python nmt.py train --cuda \
+--vocab "../data_ted/vocab/en-glpt.vocab" \
+--train-src "../data_ted/train.en-glpt.glpt.txt" \
+--train-tgt "../data_ted/train.en-glpt.en.txt" \
+--dev-src "../data_ted/dev.en-glpt.glpt.txt" \
+--dev-tgt "../data_ted/dev.en-glpt.en.txt" \
+ --save-to "../models/base_birnn/model_en-glpt.bin" \
+  --valid-niter 2000 --batch-size 36 --hidden-size 256 \
+  --embed-size 256 --uniform-init 0.1 --dropout 0.2 --clip-grad 5.0 --lr-decay 0.5
+
+
+#   train the baseline (beru)
+python nmt.py train --cuda \
+--vocab "../data_ted/vocab/en-beru.vocab" \
+--train-src "../data_ted/train.en-beru.beru.txt" \
+--train-tgt "../data_ted/train.en-beru.en.txt" \
+--dev-src "../data_ted/dev.en-beru.beru.txt" \
+--dev-tgt "../data_ted/dev.en-beru.en.txt" \
+ --save-to "../models/base_birnn/model_en-beru.bin" \
+  --valid-niter 2000 --batch-size 36 --hidden-size 256 \
+  --embed-size 256 --uniform-init 0.1 --dropout 0.2 --clip-grad 5.0 --lr-decay 0.5
