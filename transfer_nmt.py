@@ -16,7 +16,7 @@ Options:
     --dev-src=<file>                        dev source file
     --dev-tgt=<file>                        dev target file
     --vocab=<file>                          vocab file
-    --src_langs=<string>                    the list of source languages, e.g. "en,tr,ru"
+    --src_lang=<string>                     the list of source languages, e.g. "en,tr,ru"
     --tgt_lang=<string>                     the target language type
     --seed=<int>                            seed [default: 0]
     --batch-size=<int>                      batch size [default: 32]
@@ -25,7 +25,7 @@ Options:
     --clip-grad=<float>                     gradient clipping [default: 5.0]
     --log-every=<int>                       log every [default: 10]
     --max-epoch=<int>                       max epoch [default: 30]
-    --patience=<int>                        wait for how many iterations to decay learning rate [default: 5]
+    --patience=<int>                        wait for how many iterations to decay learning rate [default: 3]
     --max-num-trial=<int>                   terminate training after how many trials [default: 5]
     --lr-decay=<float>                      learning rate decay [default: 0.5]
     --beam-size=<int>                       beam size [default: 5]
@@ -80,7 +80,8 @@ class NMT(nn.Module):
         super(NMT, self).__init__()
 
         #   LJ: the source language ids
-        self.src_id_list=src_id_list
+        self.low_src_id = src_id_list[0]
+        self.high_src_id = src_id_list[1]
 
         #   LJ: the target language id
         self.tgt_id=tgt_id
@@ -91,29 +92,43 @@ class NMT(nn.Module):
         self.embed_size = embed_size
         self.hidden_size = hidden_size
         self.dropout_rate = dropout_rate
-        self.vocab = vocab
+        self.tgt_vocab = vocab[2]
+        self.low_src_vocab = vocab[0]
+        self.high_src_vocab = vocab[1]
         #self.decoding_type = decoding_type
         self.loss = loss
-        self.tgt_vocab_size = len(vocab.tgt.word2id)
-        self.low_src_embed = nn.Embedding(len(vocab.src.word2id), embed_size, padding_idx=0).cuda()
-        self.high_src_embed = nn.Embedding(len(vocab.src.word2id), embed_size, padding_idx=0).cuda()
+        self.tgt_vocab_size = len(vocab[2].word2id)
+        self.low_src_embed = nn.Embedding(len(vocab[0].word2id), embed_size, padding_idx=0).cuda()
+        self.high_src_embed = nn.Embedding(len(vocab[1].word2id), embed_size, padding_idx=0).cuda()
         self.tgt_embed = nn.Embedding(self.tgt_vocab_size, embed_size, padding_idx=0).cuda()
         self.word_dist = nn.Linear(embed_size, self.tgt_vocab_size).cuda()
-
+        self.dropout = nn.Dropout(p=dropout_rate)
+        self.high_transform = nn.Linear(embed_size, embed_size).cuda()
 
         self.cpu_time = 0
 
         self.key_size = 50
 
-        self.low_encoder = nn.LSTM(embed_size, hidden_size, bidirectional=True, dropout=dropout_rate).cuda()
-        self.high_encoder = nn.LSTM(embed_size, hidden_size, bidirectional=True, dropout=dropout_rate).cuda()
-        self.decoder = nn.LSTM(embed_size * 2, hidden_size, dropout=dropout_rate).cuda()
-        self.a_key = nn.Linear(hidden_size, self.key_size).cuda()
+        self.low_encoder = nn.LSTM(embed_size, hidden_size, bidirectional=True).cuda()
+        self.high_encoder = nn.LSTM(embed_size, hidden_size, bidirectional=True).cuda()
+        self.encoder = nn.LSTM(embed_size, hidden_size, bidirectional=True).cuda()
+        self.decoder = nn.LSTM(embed_size * 2, hidden_size).cuda()
+        self.a_key = nn.Linear(hidden_size, self.key_size * 2).cuda()
         self.out = nn.Linear(hidden_size + embed_size, embed_size).cuda()
-        self.q_key = nn.Linear(hidden_size * 4, self.key_size).cuda()
-        self.q_value = nn.Linear(hidden_size * 4, embed_size).cuda()
-        self.hidden_transform = nn.Linear(hidden_size * 4, hidden_size).cuda()
-        self.cell_transform = nn.Linear(hidden_size * 4, hidden_size).cuda()
+
+        self.q_key = nn.Linear(hidden_size * 2, self.key_size).cuda()
+        self.q_value = nn.Linear(hidden_size * 2, embed_size).cuda()
+        self.q_low_key = nn.Linear(hidden_size * 2, self.key_size).cuda()
+        self.q_low_value = nn.Linear(hidden_size * 2, embed_size).cuda()
+        self.q_high_key = nn.Linear(hidden_size * 2, self.key_size).cuda()
+        self.q_high_value = nn.Linear(hidden_size * 2, embed_size).cuda()
+
+        self.hidden_transform = nn.Linear(hidden_size * 2, hidden_size).cuda()
+        self.cell_transform = nn.Linear(hidden_size * 2, hidden_size).cuda()
+        self.low_hidden_transform = nn.Linear(hidden_size * 2, hidden_size).cuda()
+        self.low_cell_transform = nn.Linear(hidden_size * 2, hidden_size).cuda()
+        self.high_hidden_transform = nn.Linear(hidden_size * 2, hidden_size).cuda()
+        self.high_cell_transform = nn.Linear(hidden_size * 2, hidden_size).cuda()
 
     def forward(self, src_sents: List[List[str]], lang_label: List[int], tgt_sents: List[List[str]], keep_grad=True) -> Tensor:
         """
@@ -133,43 +148,78 @@ class NMT(nn.Module):
         pairs = list(zip(src_sents, tgt_sents, lang_label))
         pairs.sort(key=lambda x: len(x[0]), reverse=True)
         src_sents, tgt_sents, lang_label = zip(*pairs)
-        src_lengths = [len(s) for s in src_sents]
-        tgt_lengths = [len(s) for s in tgt_sents]
+        lang_label = np.asarray(lang_label, dtype=np.int32)
+        src_lengths = np.asarray([len(s) for s in src_sents], dtype=np.int32)
+        tgt_lengths = np.asarray([len(s) for s in tgt_sents], dtype=np.int32)
         src_max_len = max(src_lengths)
         tgt_max_len = max(tgt_lengths)
         batch_size = len(src_sents)
         src_ind = torch.zeros(batch_size, src_max_len).long()
         tgt_ind = torch.zeros(batch_size, tgt_max_len).long()
         for x in range(len(src_sents)):
-            src_ind[x, :len(src_sents[x])] = torch.LongTensor(self.vocab.src.words2indices(src_sents[x]))
-            tgt_ind[x, :len(tgt_sents[x])] = torch.LongTensor(self.vocab.tgt.words2indices(tgt_sents[x]))
+            if lang_label[x] == self.low_src_id:
+                src_ind[x, :len(src_sents[x])] = torch.LongTensor(self.low_src_vocab.words2indices(src_sents[x]))
+            elif lang_label[x] == self.high_src_id:
+                src_ind[x, :len(src_sents[x])] = torch.LongTensor(self.high_src_vocab.words2indices(src_sents[x]))
+            else:
+                raise NotImplementedError
+            tgt_ind[x, :len(tgt_sents[x])] = torch.LongTensor(self.tgt_vocab.words2indices(tgt_sents[x]))
         src_ind = src_ind.cuda()
         tgt_ind = tgt_ind.cuda()
 
         def train():
-            low_ind = lang_labels == self.languages[0]
-            high_ind = lang_labels == self.languages[1]
+            low_ind = np.where(lang_label == self.low_src_id)[0]
+            high_ind = np.where(lang_label == self.high_src_id)[0]
 
-            low_src_encodings, low_decoder_init_state = self.encode(src_ind[low_ind], src_lengths[low_ind], 'low')
-            high_src_encodings, high_decoder_init_state = self.encode(src_ind[high_ind], src_lengths[high_ind], 'high')
-            loss, num_words = self.decode((low_src_encodings, high_src_encodings), src_lengths, (low_src_last_hidden, high_src_last_hidden), tgt_ind, tgt_lengths)
+            low_src_encodings, low_decoder_init_state, low_src_embed = self.encode(src_ind[low_ind], src_lengths[low_ind], 'low_')
+            src_embed = torch.zeros(batch_size, src_max_len, self.embed_size).cuda()
+            src_embed[low_ind] = low_src_embed
+            src_spec_encodings = torch.zeros(batch_size, src_max_len, self.hidden_size * 2).cuda()
+            src_spec_encodings[low_ind, :low_src_encodings.size(1), :] = low_src_encodings
+            decoder_spec_init_cell = torch.zeros(2, batch_size, self.hidden_size).cuda()
+            decoder_spec_init_hidden = torch.zeros(2, batch_size, self.hidden_size).cuda()
+            decoder_spec_init_cell[:, low_ind, :] = low_decoder_init_state[0]
+            decoder_spec_init_hidden[:, low_ind, :] = low_decoder_init_state[1]
+            if len(high_ind):
+                high_src_encodings, high_decoder_init_state, high_src_embed = self.encode(src_ind[high_ind], src_lengths[high_ind], 'high_')
+                src_embed[high_ind] = high_src_embed
+                src_spec_encodings[high_ind, :high_src_encodings.size(1), :] = high_src_encodings
+                decoder_spec_init_cell[:, high_ind, :] = high_decoder_init_state[0]
+                decoder_spec_init_hidden[:, high_ind, :] = high_decoder_init_state[1]
+            decoder_spec_init_state = (decoder_spec_init_cell, decoder_spec_init_hidden)
+
+            src_encodings, decoder_init_state, src_embed = self.encode(src_ind, src_lengths, '', src_embed=src_embed)
+            loss, num_words = self.decode((src_spec_encodings, src_encodings), src_lengths, (decoder_spec_init_state, decoder_init_state), tgt_ind, tgt_lengths, low_ind, high_ind)
+            return loss, num_words
 
         if keep_grad:
             #   for training stage
-            train()
+            loss, num_words = train()
         else:
             #   for test stage
             with torch.no_grad():
-                train()
+                loss, num_words = train()
 
         return loss, num_words
 
-    def init_hidden(self, hidden):
-        h = hidden[0].transpose(0, 1).contiguous().view(-1, self.hidden_size * 4).unsqueeze(0)
-        c = hidden[1].transpose(0, 1).contiguous().view(-1, self.hidden_size * 4).unsqueeze(0)
-        return (F.tanh(self.hidden_transform(h)), F.tanh(self.cell_transform(c)))
+    def init_hidden(self, hidden, batch_size, low_ind, high_ind):
+        h = hidden[1][0].transpose(0, 1).contiguous().view(-1, self.hidden_size * 2).unsqueeze(0)
+        c = hidden[1][1].transpose(0, 1).contiguous().view(-1, self.hidden_size * 2).unsqueeze(0)
+        h_t = self.hidden_transform(h)
+        c_t = self.cell_transform(h)
 
-    def encode(self, src_sents: List[List[str]], src_lengths, name, keep_grad=True) -> Tuple[Tensor, Any]:
+        spec_h = hidden[0][0].transpose(0, 1).contiguous().view(-1, self.hidden_size * 2).unsqueeze(0)
+        spec_c = hidden[0][1].transpose(0, 1).contiguous().view(-1, self.hidden_size * 2).unsqueeze(0)
+        spec_h_t = torch.zeros(1, batch_size, self.hidden_size).cuda()
+        spec_c_t = torch.zeros(1, batch_size, self.hidden_size).cuda()
+        spec_h_t[:, low_ind, :] = self.low_hidden_transform(spec_h[:, low_ind, :])
+        spec_c_t[:, low_ind, :] = self.low_cell_transform(spec_c[:, low_ind, :])
+        if len(high_ind):
+            spec_h_t[:, high_ind, :] = self.high_hidden_transform(spec_h[:, high_ind, :])
+            spec_c_t[:, high_ind, :] = self.high_cell_transform(spec_c[:, high_ind, :])
+        return (F.tanh(h_t + spec_h_t), F.tanh(c_t + spec_c_t))
+
+    def encode(self, src_sents: List[List[str]], src_lengths, name, keep_grad=True, src_embed=None) -> Tuple[Tensor, Any]:
         """
         Use a GRU/LSTM to encode source sentences into hidden states
 
@@ -182,30 +232,27 @@ class NMT(nn.Module):
             decoder_init_state: decoder GRU/LSTM's initial state, computed from source encodings
         """
 
-        src_embed = eval('self.{}_src_embed(src_sents)'.format(name))
-        packed_input = pack_padded_sequence(src_embed, np.asarray(src_lengths), batch_first=True)
-        src_output, src_last_hidden = eval('self.{}_encoder(packed_input)'.format(name))
+        if src_embed is None:
+            src_embed = eval('self.{}src_embed(src_sents)'.format(name))
+        packed_input = pack_padded_sequence(src_embed, src_lengths, batch_first=True)
+        src_output, src_last_hidden = eval('self.{}encoder(packed_input)'.format(name))
         src_hidden, _ = pad_packed_sequence(src_output, batch_first=True)
 
-        return src_hidden, src_last_hidden
+        return src_hidden, src_last_hidden, src_embed
 
-    def attention(self, decoder_hidden, q_key, q_value, q_mask, center=None):
+    def attention(self, decoder_hidden, q_gen_key, q_gen_value, q_spec_key, q_spec_value, q_mask):
         a_key = self.a_key(decoder_hidden[0].squeeze(0))
 
+        q_key = torch.cat((q_gen_key, q_spec_key), dim=2)
         q_energy = torch.bmm(q_key, a_key.unsqueeze(2)).squeeze(2)
         q_energy[~q_mask] = -np.inf
         q_weights = F.softmax(q_energy, dim=1).unsqueeze(1)
-        if center is not None:
-            indices = torch.arange(q_mask.size(1)).expand(q_mask.size(0), q_mask.size(1)).cuda()
-            align_w = torch.exp(-(indices - center.unsqueeze(1)) ** 2 / 32)  # D = 8
-            q_weights = q_weights * align_w.unsqueeze(1)
-        # q_weights = F.sigmoid(q_energy).unsqueeze(1)
-        q_context = torch.bmm(q_weights, q_value)
+        q_context = torch.bmm(q_weights, q_gen_value + q_spec_value)
 
         return q_context
 
     def decode(self, src_encodings: Tensor, src_lengths, decoder_init_state: Any, tgt_sents: List[List[str]],
-               tgt_lengths, keep_grad=True):
+               tgt_lengths, low_ind, high_ind, keep_grad=True):
         """
         Given source encodings, compute the log-likelihood of predicting the gold-standard target
         sentence tokens
@@ -220,31 +267,43 @@ class NMT(nn.Module):
                 log-likelihood of generating the gold-standard target sentence for
                 each example in the input batch
         """
+        '''
         src_encodings = torch.cat(src_encodings, dim=2)
-        decoder_init_state = torch.cat(decoder_init_state, dim=2)
+        decoder_init_state = (torch.cat((decoder_init_state[0][0], decoder_init_state[1][0]), dim=2),
+                              torch.cat((decoder_init_state[0][1], decoder_init_state[1][1]), dim=2))
+        '''
 
-        batch_size = src_encodings.size(0)
-        length = src_encodings.size(1)
+        batch_size = src_encodings[0].size(0)
+        length = src_encodings[0].size(1)
         tgt_embed = self.tgt_embed(tgt_sents)
         tgt_l = tgt_embed.size(1)
 
         decoder_input = tgt_embed[:, 0, :].unsqueeze(1)
         decoder_outputs = torch.cuda.FloatTensor(batch_size, tgt_l - 1, self.hidden_size + self.embed_size)
-        decoder_hidden = self.init_hidden(decoder_init_state)
-        q_key = self.q_key(src_encodings)
-        q_value = self.q_value(src_encodings)
-        q_mask = torch.arange(length).long().cuda().repeat(src_encodings.size(0), 1) < torch.cuda.LongTensor(
+        decoder_hidden = self.init_hidden(decoder_init_state, batch_size, low_ind, high_ind)
+
+        q_key = self.q_key(src_encodings[1])
+        q_value = self.q_value(src_encodings[1])
+        q_spec_key = torch.zeros(batch_size, length, self.key_size).cuda()
+        q_spec_key[low_ind, :, :] = self.q_low_key(src_encodings[0][low_ind, :, :])
+        q_spec_value = torch.zeros(batch_size, length, self.embed_size).cuda()
+        q_spec_value[low_ind, :, :] = self.q_low_value(src_encodings[0][low_ind, :, :])
+        if len(high_ind):
+            q_spec_key[high_ind, :, :] = self.q_high_key(src_encodings[0][high_ind, :, :])
+            q_spec_value[high_ind, :, :] = self.q_high_value(src_encodings[0][high_ind, :, :])
+        q_mask = torch.arange(length).long().cuda().repeat(batch_size, 1) < torch.cuda.LongTensor(
             src_lengths).repeat(length, 1).transpose(0, 1)
+
         src_lengths = torch.cuda.LongTensor(src_lengths)
         for step in range(tgt_l - 1):
-            context = self.attention(decoder_hidden, q_key, q_value, q_mask)
+            context = self.attention(decoder_hidden, q_key, q_value, q_spec_key, q_spec_value, q_mask)
             decoder_output, decoder_hidden = self.decoder(torch.cat((decoder_input, context), dim=2).transpose(0, 1),
                                                           decoder_hidden)
 
             decoder_outputs[:, step, :] = torch.cat((decoder_output.transpose(0, 1), context), dim=2).squeeze(1)
             decoder_input = tgt_embed[:, step + 1, :].unsqueeze(1)
 
-        logits = self.word_dist(F.tanh(self.out(decoder_outputs)))
+        logits = self.word_dist(F.tanh(self.out(self.dropout(decoder_outputs))))
         logits = F.log_softmax(logits, dim=2)
         logits = logits.contiguous().view(-1, self.tgt_vocab_size)
         loss = self.loss(logits, tgt_sents[:, 1:].contiguous().view(-1))
@@ -268,7 +327,6 @@ class NMT(nn.Module):
 
         self.decoder.eval()
         self.encoder.eval()
-
 
         self.eou = 2
         top_k = 10
@@ -380,7 +438,7 @@ class NMT(nn.Module):
         # e.g., `torch.no_grad()`
 
         for src_sents, tgt_sents,src_ids,tgt_ids in batch_iter_multi_src(dev_data, batch_size):
-            loss, num_words = self.__call__(src_sents, tgt_sents, keep_grad=False)
+            loss, num_words = self.__call__(src_sents, src_ids, tgt_sents, keep_grad=False)
 
             loss = loss.detach().cpu().numpy()
 
@@ -394,14 +452,12 @@ class NMT(nn.Module):
 
     #   set model to train and test state
     def set_model_to_train(self):
-        self.encoder.train()
-        self.decoder.train()
+        self.train()
         return
 
     #   set model to validation
     def set_model_to_eval(self):
-        self.encoder.eval()
-        self.decoder.eval()
+        self.eval()
         return
 
     def load(self, model_path: str):
@@ -481,20 +537,22 @@ def train(args: Dict[str, str]):
     model_save_path = args['--save-to']
 
     #   LJ: read the vocabulary
-    vocab = pickle.load(open(args['--vocab'], 'rb'))
+    #vocab = pickle.load(open(args['--vocab'], 'rb'))
 
     #   LJ: set up the loss function (ignore to <pad>)
     nll_loss = nn.NLLLoss(ignore_index=0)
 
     #   LJ: add support for multiple src inputs
-    src_name_list=args['--src_langs'].split(",")
+    src_name_list=args['--src_lang'].split(",")
     tgt_name=args['--tgt_lang']
 
     #   read the name2id mapping
     lang2id_dict=utils.read_dict_from_pkl("./lang/lang2id.pkl")
     src_id_list=[lang2id_dict[x] for x in src_name_list]
     tgt_id=lang2id_dict[tgt_name]
-
+    vocab = (pickle.load(open('./data_ted/vocab/{}.vocab'.format(src_id_list[0]), 'rb')),
+             pickle.load(open('./data_ted/vocab/{}.vocab'.format(src_id_list[1]), 'rb')),
+             pickle.load(open('./data_ted/vocab/{}.vocab'.format(tgt_id), 'rb')))
 
     #   LJ: build the model
     model = NMT(embed_size=int(args['--embed-size']),
@@ -559,9 +617,10 @@ def train(args: Dict[str, str]):
 
             # loss = -model(src_sents, tgt_sents)
             optimizer.zero_grad()
-            loss, num_words = model(src_sents, tgt_sents)
+            loss, num_words = model(src_sents, src_ids, tgt_sents)
             loss.backward()
-            clip_grad_norm(list(model.encoder.parameters()) + list(model.decoder.parameters()), clip_grad)
+            #clip_grad_norm(list(model.encoder.parameters()) + list(model.decoder.parameters()), clip_grad)
+            clip_grad_norm(model.parameters(), clip_grad)
             optimizer.step()
 
             #   add the loss to cumlinative loss

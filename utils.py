@@ -3,6 +3,7 @@ from typing import List
 
 import numpy as np
 import copy
+import pdb
 
 import json
 import pickle
@@ -156,8 +157,21 @@ def batch_iter_multi_src(data, batch_size, shuffle=False):
     if shuffle:
         np.random.shuffle(index_array)
 
+    lang_array = np.asarray([x[0][0] for x in data])
+    langs = list(set(lang_array))
+    if len(langs) > 1:
+        low = min(langs)
+        high = max(langs)
+        low_ind = np.where(lang_array == low)[0]
+        high_ind = np.where(lang_array == high)[0]
+        low_batch_num = len(low_ind) // batch_num
+        high_batch_num = len(high_ind) // batch_num
+
     for i in range(batch_num):
-        indices = index_array[i * batch_size: (i + 1) * batch_size]
+        if len(langs) > 1:
+            indices = low_ind[i * low_batch_num:(i + 1) * low_batch_num].tolist() + high_ind[i * high_batch_num:(i + 1) * high_batch_num].tolist()
+        else:
+            indices = index_array[i * batch_size: (i + 1) * batch_size]
         examples = [data[idx] for idx in indices]
 
         examples = sorted(examples, key=lambda e: len(e[0]), reverse=True)
