@@ -4,9 +4,9 @@
 A very basic implementation of neural machine translation
 
 Usage:
-    nmt.py train --train-src=<file> --train-tgt=<file> --dev-src=<file> --dev-tgt=<file> --vocab=<file> [options]
-    nmt.py decode --vocab=<file> [options] MODEL_PATH TEST_SOURCE_FILE OUTPUT_FILE
-    nmt.py decode --vocab=<file> [options] MODEL_PATH TEST_SOURCE_FILE TEST_TARGET_FILE OUTPUT_FILE
+    transfer_nmt.py train --train-src=<file> --train-tgt=<file> --dev-src=<file> --dev-tgt=<file> --vocab=<file> [options]
+    transfer_nmt.py decode --vocab=<file> [options] MODEL_PATH TEST_SOURCE_FILE OUTPUT_FILE
+    transfer_nmt.py decode --vocab=<file> [options] MODEL_PATH TEST_SOURCE_FILE TEST_TARGET_FILE OUTPUT_FILE
 
 Options:
     -h --help                               show this screen.
@@ -17,7 +17,7 @@ Options:
     --dev-tgt=<file>                        dev target file
     --vocab=<file>                          vocab file
     --src_lang=<string>                     the list of source languages, e.g. "en,tr,ru"
-    --tgt_lang=<string>                     the target language type
+    --tgt_lang=<string>                     the target language type [default: en]
     --seed=<int>                            seed [default: 0]
     --batch-size=<int>                      batch size [default: 32]
     --embed-size=<int>                      embedding size [default: 256]
@@ -325,24 +325,23 @@ class NMT(nn.Module):
                 score: float: the log-likelihood of the target sentence
         """
 
-        self.decoder.eval()
-        self.encoder.eval()
-
         self.eou = 2
-        top_k = 10
-        src_ind = torch.cuda.LongTensor(self.vocab.src.words2indices(src_sent))
-        src_embed = self.src_embed(src_ind).unsqueeze(0)
-        if self.conv:
-            src_embed = F.relu(self.conv1d(src_embed.transpose(1, 2)))
-            src_embed = self.conv1d2(src_embed).transpose(1, 2)
-        src_lengths = np.asarray([len(src_sent)])
+        top_k = 20
+        batch_size = 1
+        low_ind = [0]
+        high_ind = []
+
+        src_ind = torch.cuda.LongTensor(self.low_src_vocab.words2indices(src_sent[1]))
+        src_embed = self.low_src_embed(src_ind).unsqueeze(0)
+        
+        src_lengths = np.asarray([len(src_sent[1])])
         packed_input = pack_padded_sequence(src_embed, src_lengths, batch_first=True)
         src_output, src_last_hidden = self.encoder(packed_input)
+        low_src_output, low_src_last_hidden = self.low_encoder(packed_input)
         src_hidden, _ = pad_packed_sequence(src_output, batch_first=True)
-        decoder_hidden = self.init_hidden(src_last_hidden)
+        low_src_hidden, _ = pad_packed_sequence(low_src_output, batch_first=True)
+        decoder_hidden = self.init_hidden((low_src_last_hidden, src_last_hidden), batch_size, low_ind, high_ind)
 
-        batch_size = src_embed.size(0)
-        assert batch_size == 1
         eos_filler = torch.zeros(beam_size).long().cuda().fill_(self.eou)
         decoder_input = self.tgt_embed(torch.cuda.LongTensor([1])).unsqueeze(1)
         length = src_hidden.size(1)
@@ -350,14 +349,14 @@ class NMT(nn.Module):
 
         q_key = self.q_key(src_hidden)
         q_value = self.q_value(src_hidden)
+        q_spec_key = torch.zeros(batch_size, length, self.key_size).cuda()
+        q_spec_key[low_ind, :, :] = self.q_low_key(low_src_hidden[low_ind, :, :])
+        q_spec_value = torch.zeros(batch_size, length, self.embed_size).cuda()
+        q_spec_value[low_ind, :, :] = self.q_low_value(low_src_hidden[low_ind, :, :])
         q_mask = torch.arange(length).long().cuda().repeat(src_hidden.size(0), 1) < torch.cuda.LongTensor(
             src_lengths).repeat(length, 1).transpose(0, 1)
-        if self.local_att:
-            align = F.sigmoid(self.v_key(F.tanh(self.l_key(decoder_hidden[0].squeeze(0))))).squeeze(1)
-            center = src_lengths.float() * align
-            context = self.attention(decoder_hidden, q_key, q_value, q_mask, center=center)
-        else:
-            context = self.attention(decoder_hidden, q_key, q_value, q_mask)
+        
+        context = self.attention(decoder_hidden, q_key, q_value, q_spec_key, q_spec_value, q_mask)
         decoder_output, decoder_hidden = self.decoder(torch.cat((decoder_input, context), dim=2), decoder_hidden)
         decoder_output = torch.cat((decoder_output, context), dim=2)
         decoder_output = self.word_dist(F.tanh(self.out(decoder_output.squeeze(1))))
@@ -371,19 +370,18 @@ class NMT(nn.Module):
         decoder_hidden = (decoder_hidden[0].expand(1, beam_size, self.hidden_size).contiguous(),
                           decoder_hidden[1].expand(1, beam_size, self.hidden_size).contiguous())
         decoder_input = self.tgt_embed(argtop.squeeze(0)).unsqueeze(1)
-        src_hidden = src_hidden.expand(beam_size, length, self.hidden_size * (int(self.bi_direct) + 1))
+
+        src_hidden = src_hidden.expand(beam_size, length, self.hidden_size * 2)
+        low_src_hidden = low_src_hidden.expand(beam_size, length, self.hidden_size * 2)
         q_key = self.q_key(src_hidden)
         q_value = self.q_value(src_hidden)
+        q_spec_key = self.q_low_key(low_src_hidden)
+        q_spec_value = self.q_low_value(low_src_hidden)
         q_mask = torch.arange(length).long().cuda().repeat(src_hidden.size(0), 1) < torch.cuda.LongTensor(
             src_lengths).repeat(length, 1).transpose(0, 1)
 
         for t in range(max_decoding_time_step - 1):
-            if self.local_att:
-                align = F.sigmoid(self.v_key(F.tanh(self.l_key(decoder_hidden[0].squeeze(0))))).squeeze(1)
-                center = src_lengths.float() * align
-                context = self.attention(decoder_hidden, q_key, q_value, q_mask, center=center)
-            else:
-                context = self.attention(decoder_hidden, q_key, q_value, q_mask)
+            context = self.attention(decoder_hidden, q_key, q_value, q_spec_key, q_spec_value, q_mask)
             decoder_output, decoder_hidden = self.decoder(torch.cat((decoder_input, context), dim=2).transpose(0, 1),
                                                           decoder_hidden)
             decoder_output = torch.cat((decoder_output.transpose(0, 1), context), dim=2)
@@ -413,7 +411,7 @@ class NMT(nn.Module):
         translation = beam[best_arg].cpu().tolist()
         if self.eou in translation:
             translation = translation[:translation.index(self.eou)]
-        translation = [self.vocab.tgt.id2word[w] for w in translation]
+        translation = [self.tgt_vocab.id2word[w] for w in translation]
         return [Hypothesis(value=translation, score=best.item())]
 
     def evaluate_ppl(self, dev_data: List[Any], batch_size: int = 32):
@@ -746,6 +744,7 @@ def decode(args: Dict[str, str]):
     test_data_src = read_corpus_multi_src(args['TEST_SOURCE_FILE'], source='src')
     if args['TEST_TARGET_FILE']:
         test_data_tgt = read_corpus_multi_src(args['TEST_TARGET_FILE'], source='tgt')
+        test_data_tgt = [data[1] for data in test_data_tgt]
 
     print(f"load model from {args['MODEL_PATH']}", file=sys.stderr)
 
@@ -756,13 +755,17 @@ def decode(args: Dict[str, str]):
     nll_loss = nn.NLLLoss(ignore_index=0)
 
     #   LJ: add support for multiple src inputs
-    src_name_list = args['--src_langs'].split(",")
+    src_name_list = args['--src_lang'].split(",")
     tgt_name = args['--tgt_lang']
 
     #   read the name2id mapping
     lang2id_dict = utils.read_dict_from_pkl("./lang/lang2id.pkl")
     src_id_list = [lang2id_dict[x] for x in src_name_list]
     tgt_id = lang2id_dict[tgt_name]
+    vocab = (pickle.load(open('./data_ted/vocab/{}.vocab'.format(src_id_list[0]), 'rb')),
+             pickle.load(open('./data_ted/vocab/{}.vocab'.format(src_id_list[1]), 'rb')),
+             pickle.load(open('./data_ted/vocab/{}.vocab'.format(tgt_id), 'rb')))
+
 
 
     #   LJ: build the model

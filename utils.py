@@ -77,7 +77,7 @@ def input_transpose_max_len(sents, pad_token,MAX_LEN):
 def read_corpus(file_path, source):
     data = []
     for line in open(file_path):
-        sent = line.strip().split(' ')
+        sent = line.lower().strip().split(' ')
         # only append <s> and </s> to the target sentence
         if source == 'tgt':
             sent = ['<s>'] + sent + ['</s>']
@@ -105,7 +105,7 @@ def read_corpus_multi_src(file_path, source):
 
     data = []
     for lid,line in enumerate(open(file_path)):
-        sent = line.strip().split(' ')
+        sent = line.lower().strip().split(' ')
         # only append <s> and </s> to the target sentence
         if source == 'tgt':
             sent = ['<s>'] + sent + ['</s>']
