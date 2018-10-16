@@ -40,7 +40,7 @@ Options:
 
 """
 import sys
-sys.path.append("../")
+#sys.path.append("../")
 import math
 import pickle
 import sys
@@ -55,7 +55,9 @@ from tqdm import tqdm
 from nltk.translate.bleu_score import corpus_bleu, sentence_bleu, SmoothingFunction
 
 import utils
+print(utils.__file__)
 from utils import read_corpus, batch_iter
+sys.path.append("../")
 from vocab import Vocab, VocabEntry
 import torch
 import torch.nn.functional as F

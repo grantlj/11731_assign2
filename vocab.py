@@ -19,9 +19,37 @@ from collections import Counter
 from itertools import chain
 from docopt import docopt
 import pickle
+import os
+import sys
+sys.path.append("../")
 
-from utils import read_corpus, input_transpose
 
+def read_corpus(file_path, source):
+    data = []
+    for line in open(file_path):
+        sent = line.strip().split(' ')
+        # only append <s> and </s> to the target sentence
+        if source == 'tgt':
+            sent = ['<s>'] + sent + ['</s>']
+        data.append(sent)
+
+    return data
+
+#   write dict or other objects to file
+def write_dict_to_pkl(obj,fn):
+    if not fn.endswith(".pkl"):
+        fn=fn+".pkl"
+    with open(fn,"wb") as f:
+        pickle.dump(obj,f)
+
+#   read object from dict
+def read_dict_from_pkl(fn):
+    if not fn.endswith(".pkl"):
+        fn=fn+".pkl"
+
+    with open(fn,"rb") as f:
+        obj=pickle.load(f)
+    return obj
 
 class VocabEntry(object):
     def __init__(self):
@@ -105,6 +133,26 @@ class Vocab(object):
         return 'Vocab(source %d words, target %d words)' % (len(self.src), len(self.tgt))
 
 
+
+#   pointwise
+if __name__=="__main__":
+    name2id_dict=read_dict_from_pkl("lang/lang2id.pkl")
+
+    vocab_size=50000
+    freq_cutoff=2
+    text_fn="data_ted/train.en-gl.gl.txt"
+    lang="gl"
+    lang_id=name2id_dict[lang]
+    dst_root_path="data_ted/vocab/"
+    dst_fn=os.path.join(dst_root_path,str(lang_id)+".vocab")
+    sents=read_corpus(text_fn,"src")
+
+    vocab=VocabEntry.from_corpus(sents,vocab_size,freq_cutoff)
+    write_dict_to_pkl(vocab,dst_fn)
+    print("done.")
+
+'''
+#   PAIRWISE 
 if __name__ == '__main__':
     args = docopt(__doc__)
 
@@ -121,3 +169,4 @@ if __name__ == '__main__':
 
     pickle.dump(vocab, open(args['VOCAB_FILE'], 'wb'))
     print('vocabulary saved to %s' % args['VOCAB_FILE'])
+'''
