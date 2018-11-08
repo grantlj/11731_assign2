@@ -164,12 +164,13 @@ def batch_iter_multi_src(data, batch_size, shuffle=False):
         high = max(langs)
         low_ind = np.where(lang_array == low)[0]
         high_ind = np.where(lang_array == high)[0]
-        low_batch_num = len(low_ind) // batch_num
-        high_batch_num = len(high_ind) // batch_num
+        low_batch_size = len(low_ind) // batch_num + 1
+        high_batch_size = batch_size - low_batch_size
 
     for i in range(batch_num):
         if len(langs) > 1:
-            indices = low_ind[i * low_batch_num:(i + 1) * low_batch_num].tolist() + high_ind[i * high_batch_num:(i + 1) * high_batch_num].tolist()
+            #indices = low_ind[i * low_batch_num:(i + 1) * low_batch_num].tolist() + high_ind[i * high_batch_num:(i + 1) * high_batch_num].tolist()
+            indices = np.random.choice(low_ind, size=low_batch_size, replace=False).tolist() + np.random.choice(high_ind, size=high_batch_size, replace=False).tolist()
         else:
             indices = index_array[i * batch_size: (i + 1) * batch_size]
         examples = [data[idx] for idx in indices]

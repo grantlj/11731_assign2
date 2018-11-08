@@ -21,6 +21,7 @@ from docopt import docopt
 import pickle
 import os
 import sys
+import pdb
 sys.path.append("../")
 
 
@@ -104,8 +105,14 @@ class VocabEntry(object):
 
 
     @staticmethod
-    def from_corpus(corpus, size, freq_cutoff=2):
+    def from_corpus(corpus, size, freq_cutoff=2,lower_case=True):
         vocab_entry = VocabEntry()
+
+        if lower_case:
+            for sent_id in range(0,len(corpus)):
+                for w_id in range(0,len(corpus[sent_id])):
+                    pdb.set_trace()
+                    corpus[sent_id][w_id]=corpus[sent_id][w_id].lower()
 
         #   word freq less than something, just go away
         word_freq = Counter(chain(*corpus))
@@ -120,38 +127,43 @@ class VocabEntry(object):
 
 
 class Vocab(object):
-    def __init__(self, src_sents, tgt_sents, vocab_size, freq_cutoff):
+    def __init__(self, src_sents, tgt_sents, vocab_size, freq_cutoff,lower_case):
         assert len(src_sents) == len(tgt_sents)
 
         print('initialize source vocabulary ..')
-        self.src = VocabEntry.from_corpus(src_sents, vocab_size, freq_cutoff)
+        self.src = VocabEntry.from_corpus(src_sents, vocab_size, freq_cutoff,lower_case=lower_case)
 
         print('initialize target vocabulary ..')
-        self.tgt = VocabEntry.from_corpus(tgt_sents, vocab_size, freq_cutoff)
+        self.tgt = VocabEntry.from_corpus(tgt_sents, vocab_size, freq_cutoff,lower_case=lower_case)
 
     def __repr__(self):
         return 'Vocab(source %d words, target %d words)' % (len(self.src), len(self.tgt))
 
 
-
+'''
 #   pointwise
 if __name__=="__main__":
     name2id_dict=read_dict_from_pkl("lang/lang2id.pkl")
 
     vocab_size=50000
     freq_cutoff=2
-    text_fn="data_ted/train.en-gl.gl.txt"
-    lang="gl"
+    lower_case=True
+    text_fn="data_ted/train.en-ru.ru.txt"
+    lang="ru"
     lang_id=name2id_dict[lang]
     dst_root_path="data_ted/vocab/"
-    dst_fn=os.path.join(dst_root_path,str(lang_id)+".vocab")
+
+    if lower_case:
+        dst_fn = os.path.join(dst_root_path, str(lang_id) + ".lowercase.vocab")
+    else:
+        dst_fn=os.path.join(dst_root_path,str(lang_id)+".vocab")
     sents=read_corpus(text_fn,"src")
 
-    vocab=VocabEntry.from_corpus(sents,vocab_size,freq_cutoff)
+    vocab=VocabEntry.from_corpus(sents,vocab_size,freq_cutoff,lower_case=lower_case)
     write_dict_to_pkl(vocab,dst_fn)
     print("done.")
-
 '''
+
 #   PAIRWISE 
 if __name__ == '__main__':
     args = docopt(__doc__)
@@ -164,9 +176,9 @@ if __name__ == '__main__':
     tgt_sents = read_corpus(args['--train-tgt'], source='tgt')
 
     #   generate vocabulary for both src and targets （this is a class)
-    vocab = Vocab(src_sents, tgt_sents, int(args['--size']), int(args['--freq-cutoff']))
+    vocab = Vocab(src_sents, tgt_sents, int(args['--size']), int(args['--freq-cutoff']),lower_case=True)
     print('generated vocabulary, source %d words, target %d words' % (len(vocab.src), len(vocab.tgt)))
 
     pickle.dump(vocab, open(args['VOCAB_FILE'], 'wb'))
     print('vocabulary saved to %s' % args['VOCAB_FILE'])
-'''
+
