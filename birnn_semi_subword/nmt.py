@@ -24,7 +24,7 @@ Options:
     --log-every=<int>                       log every [default: 10]
     --max-epoch=<int>                       max epoch [default: 30]
     --patience=<int>                        wait for how many iterations to decay learning rate [default: 5]
-    --max-num-trial=<int>                   terminate training after how many trials [default: 5]
+    --max-num-trial=<int>                   terminate training after how many trials [default: 7]
     --lr-decay=<float>                      learning rate decay [default: 0.5]
     --beam-size=<int>                       beam size [default: 5]
     --lr=<float>                            learning rate [default: 0.001]
@@ -32,7 +32,7 @@ Options:
     --save-to=<file>                        model save path
     --valid-niter=<int>                     perform validation after how many iterations [default: 2000]
     --dropout=<float>                       dropout [default: 0.2]
-    --max-decoding-time-step=<int>          maximum number of decoding time steps [default: 70]
+    --max-decoding-time-step=<int>          maximum number of decoding time steps [default: 100]
     --local                                 local attention
     --conv                                  convolutional layer between word embedding and rnn
     --src_ebed_fn=<file>                    LJ: source word embedding [default: None]
@@ -109,8 +109,6 @@ class NMT(nn.Module):
         self.decoder = nn.LSTM(embed_size * 2, hidden_size, dropout=dropout_rate).cuda()
         self.a_key = nn.Linear(hidden_size, self.key_size).cuda()
         self.out = nn.Linear(hidden_size + embed_size, embed_size).cuda()
-
-
         # self.out = nn.Linear(hidden_size, embed_size).cuda()
         if self.bi_direct:
             self.q_key = nn.Linear(hidden_size * 2, self.key_size).cuda()

@@ -1,0 +1,48 @@
+#   generate the vocab book based on subword-nmt
+python get_vocab.py --input ../data_ted/all.en-aztr.aztr.txt --output ../data_ted/vocab/aztr.subword.vocab
+python get_vocab.py --input ../data_ted/all.en-beru.beru.txt --output ../data_ted/vocab/beru.subword.vocab
+python get_vocab.py --input ../data_ted/all.en-glpt.glpt.txt --output ../data_ted/vocab/glpt.subword.vocab
+python get_vocab.py --input ../data_ted/all.en-aztr.en.txt --output ../data_ted/vocab/en.subword.vocab
+
+#   processing the previous texts
+python segment_chars.py --input ../data_ted/all.en-aztr.aztr.txt --output ../data_ted.subword/all.en-aztr.aztr.txt --vocab ../data_ted/vocab/aztr.subword.vocab
+
+#   generate the new vocab based on subwords
+python vocab.py --freq-cutoff 1 --train-src=data_ted.subword/all.en-aztr.aztr.txt --train-tgt=data_ted.subword/all.en-aztr.en.txt --size=150000 data_ted.subword/vocab/en-aztr.vocab
+python vocab.py --freq-cutoff 1 --train-src=data_ted.subword/all.en-glpt.glpt.txt --train-tgt=data_ted.subword/all.en-glpt.en.txt --size=150000 data_ted.subword/vocab/en-glpt.vocab
+python vocab.py --freq-cutoff 1 --train-src=data_ted.subword/all.en-beru.beru.txt --train-tgt=data_ted.subword/all.en-beru.en.txt --size=150000 data_ted.subword/vocab/en-beru.vocab
+
+
+#   train (aztr)
+python nmt.py train --cuda \
+--vocab "../data_ted.subword/vocab/en-aztr.vocab" \
+--train-src "../data_ted.subword/train.en-aztr.aztr.txt" \
+--train-tgt "../data_ted.subword/train.en-aztr.en.txt" \
+--dev-src "../data_ted.subword/dev.en-az.az.txt" \
+--dev-tgt "../data_ted.subword/dev.en-az.en.txt" \
+ --save-to "../models/birnn.subword/model_en-aztr.bin" \
+  --valid-niter 2000 --batch-size 36 --hidden-size 256 \
+  --embed-size 300 --uniform-init 0.1 --dropout 0.2 --clip-grad 5.0 --lr-decay 0.5
+
+
+#   glpt
+python nmt.py train --cuda \
+--vocab "../data_ted.subword/vocab/en-glpt.vocab" \
+--train-src "../data_ted.subword/train.en-glpt.glpt.txt" \
+--train-tgt "../data_ted.subword/train.en-glpt.en.txt" \
+--dev-src "../data_ted.subword/dev.en-gl.gl.txt" \
+--dev-tgt "../data_ted.subword/dev.en-gl.en.txt" \
+ --save-to "../models/birnn.subword/model_en-glpt.bin" \
+  --valid-niter 2000 --batch-size 36 --hidden-size 256 \
+  --embed-size 300 --uniform-init 0.1 --dropout 0.2 --clip-grad 5.0 --lr-decay 0.5
+
+
+python nmt.py train --cuda \
+--vocab "../data_ted.subword/vocab/en-beru.vocab" \
+--train-src "../data_ted.subword/train.en-beru.beru.txt" \
+--train-tgt "../data_ted.subword/train.en-beru.en.txt" \
+--dev-src "../data_ted.subword/dev.en-be.be.txt" \
+--dev-tgt "../data_ted.subword/dev.en-be.en.txt" \
+ --save-to "../models/birnn.subword/model_en-beru.bin" \
+  --valid-niter 2000 --batch-size 36 --hidden-size 256 \
+  --embed-size 300 --uniform-init 0.1 --dropout 0.2 --clip-grad 5.0 --lr-decay 0.5

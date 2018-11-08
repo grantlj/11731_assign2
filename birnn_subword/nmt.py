@@ -23,7 +23,7 @@ Options:
     --clip-grad=<float>                     gradient clipping [default: 5.0]
     --log-every=<int>                       log every [default: 10]
     --max-epoch=<int>                       max epoch [default: 30]
-    --patience=<int>                        wait for how many iterations to decay learning rate [default: 5]
+    --patience=<int>                        wait for how many iterations to decay learning rate [default: 3]
     --max-num-trial=<int>                   terminate training after how many trials [default: 5]
     --lr-decay=<float>                      learning rate decay [default: 0.5]
     --beam-size=<int>                       beam size [default: 5]
@@ -109,8 +109,6 @@ class NMT(nn.Module):
         self.decoder = nn.LSTM(embed_size * 2, hidden_size, dropout=dropout_rate).cuda()
         self.a_key = nn.Linear(hidden_size, self.key_size).cuda()
         self.out = nn.Linear(hidden_size + embed_size, embed_size).cuda()
-
-
         # self.out = nn.Linear(hidden_size, embed_size).cuda()
         if self.bi_direct:
             self.q_key = nn.Linear(hidden_size * 2, self.key_size).cuda()
@@ -306,7 +304,7 @@ class NMT(nn.Module):
         loss = self.loss(logits, tgt_sents[:, 1:].contiguous().view(-1))
         return loss, (tgt_sents[:, 1:] != 0).sum().item()
 
-    def beam_search(self, src_sent: List[str], beam_size: int = 20, max_decoding_time_step: int = 70) -> List[
+    def beam_search(self, src_sent: List[str], beam_size: int = 20, max_decoding_time_step: int = 100) -> List[
         Hypothesis]:
         """
         Given a single source sentence, perform beam search
