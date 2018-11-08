@@ -111,7 +111,6 @@ class VocabEntry(object):
         if lower_case:
             for sent_id in range(0,len(corpus)):
                 for w_id in range(0,len(corpus[sent_id])):
-                    pdb.set_trace()
                     corpus[sent_id][w_id]=corpus[sent_id][w_id].lower()
 
         #   word freq less than something, just go away

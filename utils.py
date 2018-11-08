@@ -10,15 +10,15 @@ import pickle
 
 #   write dict or other objects to file
 def write_dict_to_pkl(obj,fn):
-    if not fn.endswith(".pkl"):
-        fn=fn+".pkl"
+    #if not fn.endswith(".pkl"):
+    #    fn=fn+".pkl"
     with open(fn,"wb") as f:
         pickle.dump(obj,f)
 
 #   read object from dict
 def read_dict_from_pkl(fn):
-    if not fn.endswith(".pkl"):
-        fn=fn+".pkl"
+    #if not fn.endswith(".pkl"):
+    #    fn=fn+".pkl"
 
     with open(fn,"rb") as f:
         obj=pickle.load(f)

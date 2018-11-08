@@ -1,0 +1,119 @@
+#   generate the new vocab based on semi subwords
+python vocab.py --freq-cutoff 2 --train-src=data_ted.subword/all.en-aztr.aztr.txt --train-tgt=data_ted/all.en-aztr.en.txt --size=150000 data_ted.semi.subword/vocab/en-aztr.vocab
+python vocab.py --freq-cutoff 2 --train-src=data_ted.subword/all.en-glpt.glpt.txt --train-tgt=data_ted/all.en-glpt.en.txt --size=150000 data_ted.semi.subword/vocab/en-glpt.vocab
+python vocab.py --freq-cutoff 2 --train-src=data_ted.subword/all.en-beru.beru.txt --train-tgt=data_ted/all.en-beru.en.txt --size=150000 data_ted.semi.subword/vocab/en-beru.vocab
+
+python vocab.py --freq-cutoff 1 --train-src=data_ted.subword/all.en-aztr.aztr.txt --train-tgt=data_ted/all.en-aztr.en.txt --size=150000 data_ted.semi.subword/vocab/en-aztr.vocab
+python vocab.py --freq-cutoff 1 --train-src=data_ted.subword/all.en-glpt.glpt.txt --train-tgt=data_ted/all.en-glpt.en.txt --size=150000 data_ted.semi.subword/vocab/en-glpt.vocab
+python vocab.py --freq-cutoff 1 --train-src=data_ted.subword/all.en-beru.beru.txt --train-tgt=data_ted/all.en-beru.en.txt --size=150000 data_ted.semi.subword/vocab/en-beru.vocab
+
+
+#   train (aztr)
+python nmt.py train --cuda \
+--vocab "../data_ted.semi.subword/vocab/en-aztr.vocab" \
+--train-src "../data_ted.subword/train.en-aztr.aztr.txt" \
+--train-tgt "../data_ted/train.en-aztr.en.txt" \
+--dev-src "../data_ted.subword/dev.en-az.az.txt" \
+--dev-tgt "../data_ted/dev.en-az.en.txt" \
+ --save-to "../models/semi.birnn.subword/model_en-aztr.bin" \
+  --valid-niter 2000 --batch-size 36 --hidden-size 256 \
+  --embed-size 300 --uniform-init 0.1 --dropout 0.2 --clip-grad 5.0 --lr-decay 0.5
+
+#   large hidden, smaller embedding size
+
+python nmt.py train --cuda \
+--vocab "../data_ted.semi.subword/vocab/en-aztr.vocab" \
+--train-src "../data_ted.subword/train.en-aztr.aztr.txt" \
+--train-tgt "../data_ted/train.en-aztr.en.txt" \
+--dev-src "../data_ted.subword/dev.en-az.az.txt" \
+--dev-tgt "../data_ted/dev.en-az.en.txt" \
+ --save-to "../models/semi.birnn.subword/model_en-aztr.bin" \
+  --valid-niter 800 --batch-size 48 --hidden-size 384 \
+  --embed-size 256 --uniform-init 0.1 --dropout 0.2 --clip-grad 5.0 --lr-decay 0.5
+
+python nmt.py decode --cuda \
+--vocab "../data_ted.semi.subword/vocab/en-aztr.vocab" \
+--embed-size 300 --hidden-size 256 --dropout 0.2 --beam-size 50 --max-decoding-time-step 100 \
+../models/semi.birnn.subword/model_en-aztr.bin ../data_ted.subword/test.en-az.az.txt ../data_ted/test.en-az.en.txt \
+../output.subword/decode_base_birnn_en-az.en.txt
+
+#   large hidden, smaller embedding size
+
+python nmt.py decode --cuda \
+--vocab "../data_ted.semi.subword/vocab/en-aztr.vocab" \
+--embed-size 256 --hidden-size 384 --dropout 0.2 --beam-size 10 --max-decoding-time-step 100 \
+../models/semi.birnn.subword/model_en-aztr.bin ../data_ted.subword/test.en-az.az.txt ../data_ted/test.en-az.en.txt \
+../output.subword/decode_base_birnn_en-az.en.txt
+
+#   glpt
+python nmt.py train --cuda \
+--vocab "../data_ted.semi.subword/vocab/en-glpt.vocab" \
+--train-src "../data_ted.subword/train.en-glpt.glpt.txt" \
+--train-tgt "../data_ted/train.en-glpt.en.txt" \
+--dev-src "../data_ted.subword/dev.en-gl.gl.txt" \
+--dev-tgt "../data_ted/dev.en-gl.en.txt" \
+ --save-to "../models/semi.birnn.subword/model_en-glpt.bin" \
+  --valid-niter 2000 --batch-size 36 --hidden-size 256 \
+  --embed-size 300 --uniform-init 0.1 --dropout 0.2 --clip-grad 5.0 --lr-decay 0.5
+
+python nmt.py train --cuda \
+--vocab "../data_ted.semi.subword/vocab/en-glpt.vocab" \
+--train-src "../data_ted.subword/train.en-glpt.glpt.txt" \
+--train-tgt "../data_ted/train.en-glpt.en.txt" \
+--dev-src "../data_ted.subword/dev.en-gl.gl.txt" \
+--dev-tgt "../data_ted/dev.en-gl.en.txt" \
+ --save-to "../models/semi.birnn.subword/model_en-glpt.bin" \
+  --valid-niter 800 --batch-size 36 --hidden-size 384 \
+  --embed-size 256 --uniform-init 0.1 --dropout 0.2 --clip-grad 5.0 --lr-decay 0.5
+
+
+python nmt.py decode --cuda \
+--vocab "../data_ted.semi.subword/vocab/en-glpt.vocab" \
+--embed-size 300 --hidden-size 256 --dropout 0.2 --beam-size 50 --max-decoding-time-step 100 \
+../models/semi.birnn.subword/model_en-glpt.bin ../data_ted.subword/test.en-gl.gl.txt ../data_ted/test.en-gl.en.txt \
+../output.subword/decode_base_birnn_en-gl.en.txt
+
+#   large hidden, smaller embedding size
+
+python nmt.py decode --cuda \
+--vocab "../data_ted.semi.subword/vocab/en-glpt.vocab" \
+--embed-size 256 --hidden-size 384 --dropout 0.2 --beam-size 10 --max-decoding-time-step 100 \
+../models/semi.birnn.subword/model_en-glpt.bin ../data_ted.subword/test.en-gl.gl.txt ../data_ted/test.en-gl.en.txt \
+../output.subword/decode_base_birnn_en-gl.en.txt
+
+
+beru
+python nmt.py train --cuda \
+--vocab "../data_ted.semi.subword/vocab/en-beru.vocab" \
+--train-src "../data_ted.subword/train.en-beru.beru.txt" \
+--train-tgt "../data_ted/train.en-beru.en.txt" \
+--dev-src "../data_ted.subword/dev.en-be.be.txt" \
+--dev-tgt "../data_ted/dev.en-be.en.txt" \
+ --save-to "../models/semi.birnn.subword/model_en-beru.bin" \
+  --valid-niter 2000 --batch-size 36 --hidden-size 256 \
+  --embed-size 300 --uniform-init 0.1 --dropout 0.2 --clip-grad 5.0 --lr-decay 0.5
+
+
+python nmt.py train --cuda \
+--vocab "../data_ted.semi.subword/vocab/en-beru.vocab" \
+--train-src "../data_ted.subword/train.en-beru.beru.txt" \
+--train-tgt "../data_ted/train.en-beru.en.txt" \
+--dev-src "../data_ted.subword/dev.en-be.be.txt" \
+--dev-tgt "../data_ted/dev.en-be.en.txt" \
+ --save-to "../models/semi.birnn.subword/model_en-beru.bin" \
+  --valid-niter 800 --batch-size 48 --hidden-size 384 \
+  --embed-size 256 --uniform-init 0.1 --dropout 0.2 --clip-grad 5.0 --lr-decay 0.5
+
+ python nmt.py decode --cuda \
+--vocab "../data_ted.semi.subword/vocab/en-beru.vocab" \
+--embed-size 300 --hidden-size 256 --dropout 0.2 --beam-size 50 --max-decoding-time-step 100 \
+../models/semi.birnn.subword/model_en-beru.bin ../data_ted.subword/test.en-be.be.txt ../data_ted/test.en-be.en.txt \
+../output.subword/decode_base_birnn_en-be.en.txt
+
+#   large hidden, smaller embedding size
+
+ python nmt.py decode --cuda \
+--vocab "../data_ted.semi.subword/vocab/en-beru.vocab" \
+--embed-size 256 --hidden-size 384 --dropout 0.2 --beam-size 10 --max-decoding-time-step 100 \
+../models/semi.birnn.subword/model_en-beru.bin ../data_ted.subword/test.en-be.be.txt ../data_ted/test.en-be.en.txt \
+../output.subword/decode_base_birnn_en-be.en.txt

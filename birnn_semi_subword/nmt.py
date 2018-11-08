@@ -24,7 +24,7 @@ Options:
     --log-every=<int>                       log every [default: 10]
     --max-epoch=<int>                       max epoch [default: 30]
     --patience=<int>                        wait for how many iterations to decay learning rate [default: 5]
-    --max-num-trial=<int>                   terminate training after how many trials [default: 5]
+    --max-num-trial=<int>                   terminate training after how many trials [default: 7]
     --lr-decay=<float>                      learning rate decay [default: 0.5]
     --beam-size=<int>                       beam size [default: 5]
     --lr=<float>                            learning rate [default: 0.001]
@@ -32,10 +32,9 @@ Options:
     --save-to=<file>                        model save path
     --valid-niter=<int>                     perform validation after how many iterations [default: 2000]
     --dropout=<float>                       dropout [default: 0.2]
-    --max-decoding-time-step=<int>          maximum number of decoding time steps [default: 70]
-    --word-predict                          word prediction
-    --pretrain                              use pretrained word embeddings
-    --lang=<str>                            source languages, sperated by comma
+    --max-decoding-time-step=<int>          maximum number of decoding time steps [default: 100]
+    --local                                 local attention
+    --conv                                  convolutional layer between word embedding and rnn
     --src_ebed_fn=<file>                    LJ: source word embedding [default: None]
     --tgt_ebed_fn=<file>                    LJ: target word embedding [default: None]
 
@@ -55,7 +54,6 @@ from docopt import docopt
 from tqdm import tqdm
 from nltk.translate.bleu_score import corpus_bleu, sentence_bleu, SmoothingFunction
 
-sys.path.append("../")
 import utils
 #import utils
 print(utils.__file__)
@@ -80,11 +78,12 @@ class NMT(nn.Module):
 
     def __init__(self, embed_size, hidden_size, vocab, loss,
                  dropout_rate=0.2, decoding_type="ATTENTION",
-                 bi_direct=True, word_pred=False):
+                 bi_direct=True, local_att=False, conv=False):
         super(NMT, self).__init__()
 
         self.bi_direct = bi_direct
-        self.word_pred = word_pred
+        self.conv = conv
+        self.local_att = local_att
         self.embed_size = embed_size
         self.hidden_size = hidden_size
         self.dropout_rate = dropout_rate
@@ -110,8 +109,6 @@ class NMT(nn.Module):
         self.decoder = nn.LSTM(embed_size * 2, hidden_size, dropout=dropout_rate).cuda()
         self.a_key = nn.Linear(hidden_size, self.key_size).cuda()
         self.out = nn.Linear(hidden_size + embed_size, embed_size).cuda()
-
-
         # self.out = nn.Linear(hidden_size, embed_size).cuda()
         if self.bi_direct:
             self.q_key = nn.Linear(hidden_size * 2, self.key_size).cuda()
@@ -123,12 +120,13 @@ class NMT(nn.Module):
             self.q_key = nn.Linear(hidden_size, self.key_size).cuda()
             self.q_value = nn.Linear(hidden_size, embed_size).cuda()
 
-        if word_pred:
-            self.word_init_dist = nn.Linear(embed_size, self.tgt_vocab_size).cuda()
-            self.init_out = nn.Linear(embed_size + hidden_size, embed_size).cuda()
-            self.word_hidden_dist = nn.Linear(embed_size, self.tgt_vocab_size).cuda()
-            self.hidden_out = nn.Linear(embed_size + hidden_size, embed_size).cuda()
+        if local_att:
+            self.l_key = nn.Linear(hidden_size, self.key_size).cuda()
+            self.v_key = nn.Linear(self.key_size, 1).cuda()
 
+        if self.conv:
+            self.conv1d = nn.Conv1d(embed_size, embed_size, 3, padding=1).cuda()
+            self.conv1d2 = nn.Conv1d(embed_size, embed_size, 3, padding=1).cuda()
         # initialize neural network layers...
         '''
         if decoding_type=="ATTENTION":
@@ -175,26 +173,19 @@ class NMT(nn.Module):
         tgt_ind = tgt_ind.cuda()
         self.cpu_time += time.clock() - _time
 
-        word_pred_loss = None
         if keep_grad:
             #   for training stage
             # src_encodings, decoder_init_state = self.encode(src_sents_padded)
             src_encodings, decoder_init_state = self.encode(src_ind, src_lengths)
-            if self.word_pred:
-                loss, num_words, word_pred_loss = self.decode(src_encodings, src_lengths, decoder_init_state, tgt_ind, tgt_lengths, keep_grad)
-            else:
-                loss, num_words = self.decode(src_encodings, src_lengths, decoder_init_state, tgt_ind, tgt_lengths, keep_grad)
+            loss, num_words = self.decode(src_encodings, src_lengths, decoder_init_state, tgt_ind, tgt_lengths)
         else:
             #   for test stage
             with torch.no_grad():
                 # src_encodings, decoder_init_state = self.encode(src_sents_padded)
                 src_encodings, decoder_init_state = self.encode(src_ind, src_lengths)
-                loss, num_words = self.decode(src_encodings, src_lengths, decoder_init_state, tgt_ind, tgt_lengths, keep_grad)
+                loss, num_words = self.decode(src_encodings, src_lengths, decoder_init_state, tgt_ind, tgt_lengths)
 
-        if word_pred_loss is None:
-            return loss, num_words
-        else:
-            return loss, num_words, word_pred_loss
+        return loss, num_words
 
     def init_hidden(self, hidden):
         if self.bi_direct:
@@ -240,6 +231,9 @@ class NMT(nn.Module):
         return src_encodings, decoder_init_state  # the coding for each state (sent_len,batch_size,1,256), the last hidden_output (1*batch_size*256)
         '''
         src_embed = self.src_embed(src_sents)
+        if self.conv:
+            src_embed = F.relu(self.conv1d(src_embed.transpose(1, 2)))
+            src_embed = self.conv1d2(src_embed).transpose(1, 2)
         packed_input = pack_padded_sequence(src_embed, np.asarray(src_lengths), batch_first=True)
         src_output, src_last_hidden = self.encoder(packed_input)
         src_hidden, _ = pad_packed_sequence(src_output, batch_first=True)
@@ -253,6 +247,10 @@ class NMT(nn.Module):
         q_energy = torch.bmm(q_key, a_key.unsqueeze(2)).squeeze(2)
         q_energy[~q_mask] = -np.inf
         q_weights = F.softmax(q_energy, dim=1).unsqueeze(1)
+        if center is not None:
+            indices = torch.arange(q_mask.size(1)).expand(q_mask.size(0), q_mask.size(1)).cuda()
+            align_w = torch.exp(-(indices - center.unsqueeze(1)) ** 2 / 32)  # D = 8
+            q_weights = q_weights * align_w.unsqueeze(1)
         # q_weights = F.sigmoid(q_energy).unsqueeze(1)
         q_context = torch.bmm(q_weights, q_value)
 
@@ -288,9 +286,12 @@ class NMT(nn.Module):
             src_lengths).repeat(length, 1).transpose(0, 1)
         src_lengths = torch.cuda.LongTensor(src_lengths)
         for step in range(tgt_l - 1):
-            context = self.attention(decoder_hidden, q_key, q_value, q_mask)
-            if self.word_pred and step == 0:
-                word_init_pred_logits = self.word_init_dist(F.tanh(self.init_out(self.dropout(torch.cat((decoder_hidden[0].squeeze(0), context.squeeze(1)), dim=1)))))
+            if self.local_att:
+                align = F.sigmoid(self.v_key(F.tanh(self.l_key(decoder_hidden[0].squeeze(0))))).squeeze(1)
+                center = src_lengths.float() * align
+                context = self.attention(decoder_hidden, q_key, q_value, q_mask, center=center)
+            else:
+                context = self.attention(decoder_hidden, q_key, q_value, q_mask)
             decoder_output, decoder_hidden = self.decoder(torch.cat((decoder_input, context), dim=2).transpose(0, 1),
                                                           decoder_hidden)
 
@@ -301,13 +302,7 @@ class NMT(nn.Module):
         logits = F.log_softmax(logits, dim=2)
         logits = logits.contiguous().view(-1, self.tgt_vocab_size)
         loss = self.loss(logits, tgt_sents[:, 1:].contiguous().view(-1))
-
-        if self.word_pred and keep_grad:
-            word_init_logprobs = F.log_softmax(word_init_pred_logits, dim=1).expand(tgt_l - 1, batch_size, self.tgt_vocab_size).transpose(0, 1).contiguous().view(-1, self.tgt_vocab_size)
-            word_pred_loss = self.loss(word_init_logprobs, tgt_sents[:, 1:].contiguous().view(-1))
-            return loss, (tgt_sents[:, 1:] != 0).sum().item(), word_pred_loss
-        else:
-            return loss, (tgt_sents[:, 1:] != 0).sum().item()
+        return loss, (tgt_sents[:, 1:] != 0).sum().item()
 
     def beam_search(self, src_sent: List[str], beam_size: int = 20, max_decoding_time_step: int = 70) -> List[
         Hypothesis]:
@@ -328,10 +323,14 @@ class NMT(nn.Module):
         self.decoder.eval()
         self.encoder.eval()
 
+
         self.eou = 2
-        top_k = 20
+        top_k = 10
         src_ind = torch.cuda.LongTensor(self.vocab.src.words2indices(src_sent))
         src_embed = self.src_embed(src_ind).unsqueeze(0)
+        if self.conv:
+            src_embed = F.relu(self.conv1d(src_embed.transpose(1, 2)))
+            src_embed = self.conv1d2(src_embed).transpose(1, 2)
         src_lengths = np.asarray([len(src_sent)])
         packed_input = pack_padded_sequence(src_embed, src_lengths, batch_first=True)
         src_output, src_last_hidden = self.encoder(packed_input)
@@ -349,7 +348,12 @@ class NMT(nn.Module):
         q_value = self.q_value(src_hidden)
         q_mask = torch.arange(length).long().cuda().repeat(src_hidden.size(0), 1) < torch.cuda.LongTensor(
             src_lengths).repeat(length, 1).transpose(0, 1)
-        context = self.attention(decoder_hidden, q_key, q_value, q_mask)
+        if self.local_att:
+            align = F.sigmoid(self.v_key(F.tanh(self.l_key(decoder_hidden[0].squeeze(0))))).squeeze(1)
+            center = src_lengths.float() * align
+            context = self.attention(decoder_hidden, q_key, q_value, q_mask, center=center)
+        else:
+            context = self.attention(decoder_hidden, q_key, q_value, q_mask)
         decoder_output, decoder_hidden = self.decoder(torch.cat((decoder_input, context), dim=2), decoder_hidden)
         decoder_output = torch.cat((decoder_output, context), dim=2)
         decoder_output = self.word_dist(F.tanh(self.out(decoder_output.squeeze(1))))
@@ -369,11 +373,13 @@ class NMT(nn.Module):
         q_mask = torch.arange(length).long().cuda().repeat(src_hidden.size(0), 1) < torch.cuda.LongTensor(
             src_lengths).repeat(length, 1).transpose(0, 1)
 
-        best = -np.inf
-        best_hyp = None
-        finished = 0
         for t in range(max_decoding_time_step - 1):
-            context = self.attention(decoder_hidden, q_key, q_value, q_mask)
+            if self.local_att:
+                align = F.sigmoid(self.v_key(F.tanh(self.l_key(decoder_hidden[0].squeeze(0))))).squeeze(1)
+                center = src_lengths.float() * align
+                context = self.attention(decoder_hidden, q_key, q_value, q_mask, center=center)
+            else:
+                context = self.attention(decoder_hidden, q_key, q_value, q_mask)
             decoder_output, decoder_hidden = self.decoder(torch.cat((decoder_input, context), dim=2).transpose(0, 1),
                                                           decoder_hidden)
             decoder_output = torch.cat((decoder_output.transpose(0, 1), context), dim=2)
@@ -386,41 +392,25 @@ class NMT(nn.Module):
             last = best_args / top_k
             curr = best_args % top_k
             beam[:, :] = beam[last, :]
-            #beam_eos = beam_eos[last]
+            beam_eos = beam_eos[last]
             beam_probs = beam_probs[last]
-            #beam[:, t + 1] = argtop[last, curr] * (~beam_eos).long() + eos_filler * beam_eos.long()
-            beam[:, t + 1] = argtop[last, curr]
-            #mask = ~beam_eos
-            #beam_probs[mask] = (beam_probs[mask] * (t + 1) + best_probs[mask]) / (t + 2)
-            beam_probs = (beam_probs * (t + 1) + best_probs) / (t + 2)
+            beam[:, t + 1] = argtop[last, curr] * (~beam_eos).long() + eos_filler * beam_eos.long()
+            mask = ~beam_eos
+            beam_probs[mask] = (beam_probs[mask] * (t + 1) + best_probs[mask]) / (t + 2)
             decoder_hidden = (decoder_hidden[0][:, last, :], decoder_hidden[1][:, last, :])
-
-            for x in range(beam_size):
-                if beam[x, t+1] == self.eou:
-                    if beam_probs[x] > best:
-                        best = beam_probs[x].item()
-                        best_hyp = beam[x].clone()
-                    finished += 1
-                    beam_probs[x] = -10e8
 
             beam_eos = beam_eos | (beam[:, t + 1] == self.eou)
             decoder_input = self.tgt_embed(beam[:, t + 1]).unsqueeze(1)
 
-            #if beam_eos.all():
-            if finished > beam_size:
+            if beam_eos.all():
                 break
 
-        #best, best_arg = beam_probs.max(0)
-        #translation = beam[best_arg].cpu().tolist()
-        if best_hyp is not None:
-            translation = best_hyp.cpu().tolist()
-        else:
-            best, best_arg = beam_probs.max(0)
-            translation = beam[best_arg].cpu().tolist()
+        best, best_arg = beam_probs.max(0)
+        translation = beam[best_arg].cpu().tolist()
         if self.eou in translation:
             translation = translation[:translation.index(self.eou)]
         translation = [self.vocab.tgt.id2word[w] for w in translation]
-        return [Hypothesis(value=translation, score=best)]
+        return [Hypothesis(value=translation, score=best.item())]
 
     def evaluate_ppl(self, dev_data: List[Any], batch_size: int = 32):
         """
@@ -551,34 +541,20 @@ def train(args: Dict[str, str]):
     #   LJ: set up the loss function (ignore to <pad>)
     nll_loss = nn.NLLLoss(ignore_index=0)
 
+
+
+
     #   LJ: build the model
     model = NMT(embed_size=int(args['--embed-size']),
                 hidden_size=int(args['--hidden-size']),
                 dropout_rate=float(args['--dropout']),
-                word_pred=bool(args['--word-predict']),
+                local_att=bool(args['--local']),
+                conv=bool(args['--conv']),
                 vocab=vocab,
                 loss=nll_loss)
     bound = float(args['--uniform-init'])
     for p in model.parameters():
         torch.nn.init.uniform_(p.data, a=-bound, b=bound)
-
-    if bool(args['--pretrain']):
-        langs = str(args['--lang']).split(',')
-        def load_pretrain(lang, word2id, matrix):
-            embed = open('../word_embed/wiki.{}.vec'.format(lang))
-            next(embed)
-            for line in embed:
-                word, vec = line.split(' ', 1)
-                if word in word2id:
-                    matrix[word2id[word]] = np.fromstring(vec, dtype=np.float32, sep=' ')
-
-        src_embed = np.random.uniform(low=-0.1, high=0.1, size=(len(vocab.src.id2word), model.embed_size))
-        tgt_embed = np.random.uniform(low=-0.1, high=0.1, size=(len(vocab.tgt.id2word), model.embed_size))
-        load_pretrain('en', vocab.tgt.word2id, tgt_embed)
-        load_pretrain(langs[0], vocab.src.word2id, src_embed)
-        load_pretrain(langs[1], vocab.src.word2id, src_embed)
-        model.src_embed.weight.data = torch.from_numpy(src_embed).float().cuda()
-        model.tgt_embed.weight.data = torch.from_numpy(tgt_embed).float().cuda()
 
     src_embed_fn=args['--src_ebed_fn']
     tgt_embed_fn=args['--tgt_ebed_fn']
@@ -627,13 +603,10 @@ def train(args: Dict[str, str]):
             # (batch_size)
             # LJ: train on the mini-batch and get the loss, backpropagation
 
+            # loss = -model(src_sents, tgt_sents)
             optimizer.zero_grad()
-            if model.word_pred:
-                loss, num_words, word_pred_loss = model(src_sents, tgt_sents)
-                (loss + word_pred_loss).backward()
-            else:
-                loss, num_words = model(src_sents, tgt_sents)
-                loss.backward()
+            loss, num_words = model(src_sents, tgt_sents)
+            loss.backward()
             clip_grad_norm(list(model.encoder.parameters()) + list(model.decoder.parameters()), clip_grad)
             optimizer.step()
 
@@ -773,8 +746,9 @@ def decode(args: Dict[str, str]):
     model = NMT(embed_size=int(args['--embed-size']),
                 hidden_size=int(args['--hidden-size']),
                 dropout_rate=float(args['--dropout']),
+                local_att=bool(args['--local']),
+                conv=bool(args['--conv']),
                 vocab=vocab,
-                word_pred=bool(args['--word-predict']),
                 loss=nll_loss)
 
     '''
